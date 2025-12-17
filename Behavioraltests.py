@@ -79,7 +79,8 @@ def run_tests():
         print(f"Text: {case['text']}")
 
         sentiment_result = sentiment_analyzer.analyze(case["text"])
-        entities = ner.extract_medical_entities(case["text"])
+        # Use utterance mode to prevent diagnosis hallucination
+        entities = ner.extract_medical_entities(case["text"], mode="utterance")
 
         # Sentiment check
         sentiment_match = sentiment_result["Sentiment"] == case["expected_sentiment"]

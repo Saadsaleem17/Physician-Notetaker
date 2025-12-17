@@ -141,21 +141,148 @@ class MedicalNER:
             
         return sorted(list(treatments))
     
-    def extract_diagnosis(self, text: str) -> str:
-        """Extract primary diagnosis from text"""
+    def extract_diagnosis(self, text: str, mode: str = "auto") -> str:
+        """
+        Extract primary diagnosis from text with conservative approach
+        
+        Args:
+            text: Input text
+            mode: 'utterance' (single statement), 'transcript' (full conversation), 'auto' (detect)
+            
+        Returns:
+            Diagnosis string or empty string if insufficient context
+        """
         text_lower = text.lower()
         
-        # Direct pattern matching
-        if 'whiplash injury' in text_lower:
-            return "Whiplash injury"
-        elif 'whiplash' in text_lower:
-            return "Whiplash"
-        elif 'lower back strain' in text_lower:
-            return "Whiplash injury and lower back strain"
-        elif 'neck injury' in text_lower or 'back injury' in text_lower:
-            return "Neck and back injury"
+        # Detect mode automatically if not specified
+        if mode == "auto":
+            mode = self._detect_mode(text)
         
-        return "Whiplash injury"  # Default based on context
+        # STRICT: In utterance mode, NEVER infer diagnosis
+        if mode == "utterance":
+            # Only return diagnosis if explicitly stated with confirmation patterns
+            if self._has_explicit_diagnosis_confirmation(text_lower):
+                return self._extract_confirmed_diagnosis(text_lower)
+            return ""  # No diagnosis for single utterances without explicit confirmation
+        
+        # For transcript mode, require sufficient clinical context
+        if not self._has_sufficient_clinical_context(text_lower):
+            # Check for explicit diagnosis statements
+            if self._has_explicit_diagnosis_confirmation(text_lower):
+                return self._extract_confirmed_diagnosis(text_lower)
+            return ""  # No diagnosis without context
+        
+        # Only extract if diagnosis is explicitly mentioned in clinical context
+        diagnosis = self._extract_mentioned_diagnosis(text_lower)
+        return diagnosis if diagnosis else ""
+    
+    def _detect_mode(self, text: str) -> str:
+        """
+        Detect if input is a single utterance or full transcript
+        
+        Conservative: defaults to 'utterance' to prevent hallucination
+        """
+        text_lower = text.lower()
+        
+        # Indicators of full transcript
+        transcript_indicators = [
+            'physician:' in text_lower,
+            'doctor:' in text_lower,
+            'patient:' in text_lower,
+            text.count('\n') > 5,  # Multiple lines
+            text.count('.') > 5,   # Multiple sentences
+            len(text) > 300,       # Substantial text
+        ]
+        
+        # If multiple indicators, likely a transcript
+        if sum(transcript_indicators) >= 2:
+            return "transcript"
+        
+        return "utterance"  # Default to utterance (conservative)
+    
+    def _has_explicit_diagnosis_confirmation(self, text_lower: str) -> bool:
+        """
+        Check if text explicitly confirms a diagnosis
+        
+        Only returns True if diagnosis is stated with medical authority
+        """
+        confirmation_patterns = [
+            r'diagnosed\s+with\s+\w+',
+            r'doctor\s+(?:said|told|confirmed|diagnosed)\s+(?:it\s+)?(?:was|is)\s+(?:a\s+)?\w+',
+            r'was\s+told\s+(?:it\s+)?(?:was|is)\s+(?:a\s+)?\w+',
+            r'confirmed\s+(?:as\s+)?(?:a\s+)?\w+\s+(?:injury|diagnosis|condition)',
+            r'medical\s+report\s+(?:showed|indicated|confirmed)',
+            r'(?:emergency|hospital|clinic)\s+(?:said|diagnosed|confirmed)',
+        ]
+        
+        for pattern in confirmation_patterns:
+            if re.search(pattern, text_lower):
+                return True
+        
+        return False
+    
+    def _extract_confirmed_diagnosis(self, text_lower: str) -> str:
+        """Extract explicitly confirmed diagnosis from text"""
+        # Extract diagnosis only when explicitly stated
+        diagnosis_patterns = [
+            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(whiplash\s+injury)', 'Whiplash injury'),
+            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(whiplash)', 'Whiplash'),
+            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(lower\s+back\s+strain)', 'Lower back strain'),
+            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(neck\s+injury)', 'Neck injury'),
+            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(back\s+injury)', 'Back injury'),
+        ]
+        
+        for pattern, diagnosis in diagnosis_patterns:
+            if re.search(pattern, text_lower):
+                return diagnosis
+        
+        return ""
+    
+    def _has_sufficient_clinical_context(self, text_lower: str) -> bool:
+        """
+        Check if text has enough clinical context to infer diagnosis
+        
+        Requires multiple clinical indicators
+        """
+        # Count clinical indicators
+        indicators = 0
+        
+        # Symptom mentions
+        symptom_keywords = ['pain', 'ache', 'hurt', 'discomfort', 'injury', 'trauma']
+        indicators += sum(1 for kw in symptom_keywords if kw in text_lower)
+        
+        # Treatment mentions
+        treatment_keywords = ['physiotherapy', 'therapy', 'medication', 'treatment', 'sessions']
+        indicators += sum(1 for kw in treatment_keywords if kw in text_lower)
+        
+        # Temporal context (accident, incident)
+        temporal_keywords = ['accident', 'incident', 'injury', 'trauma', 'emergency']
+        indicators += sum(1 for kw in temporal_keywords if kw in text_lower)
+        
+        # Medical examination
+        exam_keywords = ['examination', 'x-ray', 'scan', 'test', 'checked']
+        indicators += sum(1 for kw in exam_keywords if kw in text_lower)
+        
+        # Require at least 3 different clinical indicators
+        return indicators >= 3
+    
+    def _extract_mentioned_diagnosis(self, text_lower: str) -> str:
+        """
+        Extract diagnosis only if mentioned in clinical context
+        
+        Does NOT infer - only extracts what's explicitly stated
+        """
+        # Pattern matching for explicitly mentioned diagnoses
+        if 'whiplash injury' in text_lower:
+            # Verify it's in clinical context, not just a word match
+            if any(word in text_lower for word in ['accident', 'trauma', 'emergency', 'diagnosed']):
+                return "Whiplash injury"
+        
+        if 'lower back strain' in text_lower:
+            return "Lower back strain"
+        
+        # Do NOT return default diagnosis - be conservative
+        return ""
     
     def extract_current_status(self, text: str) -> str:
         """Extract current patient status"""
@@ -222,12 +349,13 @@ class MedicalNER:
             
         return "Unknown"
     
-    def extract_medical_entities(self, text: str) -> Dict:
+    def extract_medical_entities(self, text: str, mode: str = "auto") -> Dict:
         """
         Main method to extract all medical entities from transcript
         
         Args:
             text: Medical transcript text
+            mode: 'utterance' (single statement), 'transcript' (full conversation), 'auto' (detect)
             
         Returns:
             Dictionary with structured medical information
@@ -236,7 +364,7 @@ class MedicalNER:
             "Patient_Name": self.extract_patient_name(text),
             "Date_of_Incident": self.extract_date_of_incident(text),
             "Symptoms": self.extract_symptoms(text),
-            "Diagnosis": self.extract_diagnosis(text),
+            "Diagnosis": self.extract_diagnosis(text, mode=mode),  # Use mode-aware extraction
             "Treatment": self.extract_treatments(text),
             "Current_Status": self.extract_current_status(text),
             "Prognosis": self.extract_prognosis(text)

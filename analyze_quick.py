@@ -27,9 +27,9 @@ try:
     sentiment_analyzer = SentimentIntentAnalyzer()
     ner = MedicalNER()
     
-    # Run NLP Analysis
+    # Run NLP Analysis with UTTERANCE mode to prevent diagnosis hallucination
     sentiment_result = sentiment_analyzer.analyze(patient_text)
-    entities = ner.extract_medical_entities(patient_text)
+    entities = ner.extract_medical_entities(patient_text, mode="utterance")
     
     # Display results (NLP-generated, not hardcoded)
     print(f"\n📝 INPUT: \"{patient_text}\"")
@@ -42,9 +42,13 @@ try:
     
     if entities['Symptoms']:
         print(f"\n🩺 EXTRACTED SYMPTOMS: {', '.join(entities['Symptoms'])}")
+    else:
+        print(f"\n🩺 EXTRACTED SYMPTOMS: None detected")
     
     if entities['Diagnosis']:
         print(f"📋 DIAGNOSIS: {entities['Diagnosis']}")
+    else:
+        print(f"📋 DIAGNOSIS: None (insufficient clinical context)")
     
     # NLP-based clinical assessment
     print("\n" + "="*70)
