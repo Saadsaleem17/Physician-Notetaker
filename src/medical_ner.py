@@ -99,14 +99,17 @@ class MedicalNER:
         symptom_patterns = [
             # General "I am having/have" pattern
             r'(?:i\s+am\s+having|i\s+have|having)\s+(?:a\s+)?([a-z\s]+?)(?:\s+doctor|\s+and|,|\.|$)',
-            # Pain patterns
-            r'(?:pain|ache|hurt|discomfort|soreness|stiffness)\s+(?:in|on|at)\s+(?:my|the|their)?\s*([a-z\s]+?)(?:\.|,|;|\n)',
+            # Body part + sensation patterns
+            r'(?:my|the)\s+(neck|back|head|chest|throat|stomach)\s+(hurts?|aches?|pains?)',
+            r'(neck|back|head|chest)\s+(pain|ache|discomfort|stiffness)',
+            r'(?:pain|ache|discomfort|soreness|stiffness)\s+(?:in|on|at)\s+(?:my|the)?\s*(neck|back|head|chest|shoulder|arm|leg)s?',
+            # Compound symptoms
             r'(neck\s+(?:and\s+)?back\s+pain)',
             r'(head\s+impact|hit\s+(?:my\s+)?head)',
             r'(trouble\s+sleeping)',
-            r'(occasional\s+backaches?)',
-            r'(whiplash)',
+            r'(occasional\s+(?:back)?aches?)',
             # Specific symptoms
+            r'\b(?:i feel|i have|having)\s+(discomfort)\b',
             r'\b(cough(?:ing)?)\b',
             r'\b(headaches?)\b',
             r'\b(fever)\b',
@@ -116,6 +119,8 @@ class MedicalNER:
             r'\b(dizziness)\b',
             r'\b(shortness\s+of\s+breath)\b',
             r'\b(chest\s+pain)\b',
+            r'\b(back\s+pain)\b',
+            r'\b(neck\s+pain)\b',
             r'\b(sore\s+throat)\b',
             r'\b(runny\s+nose)\b',
             r'\b(loss\s+of\s+appetite)\b',
@@ -230,13 +235,12 @@ class MedicalNER:
                 # Clean up transformer artifacts
                 symptom_text = symptom_text.replace('##', '').strip()
                 
-                # Skip if too short or common non-symptom words
+                # Skip only genuinely malformed extractions
                 if len(symptom_text) < 3:
                     continue
                 
-                skip_words = {'patient', 'doctor', 'physician', 'having', 'feel', 'feels', 
-                             'been', 'severe', 'persistent', 'since', 'yesterday', 'heavy'}
-                if symptom_text.lower() in skip_words:
+                # Skip obvious transformer artifacts (partial word splits)
+                if symptom_text.lower().endswith('iotherapy') or symptom_text.lower() in {'the', 'and', 'or', 'a', 'an'}:
                     continue
                 
                 # Check if entity is symptom-related with good confidence
@@ -306,16 +310,47 @@ class MedicalNER:
             
         return sorted(list(treatments))
     
+    def has_diagnostic_context(self, text: str) -> bool:
+        """
+        Check if text contains explicit diagnostic confirmation.
+        
+        This is a semantic gate: Does this text explicitly state a diagnosis?
+        Not: "Does this text mention medical words?"
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            True if explicit diagnostic statement present
+        """
+        text_lower = text.lower()
+        
+        # Explicit diagnostic confirmation patterns
+        diagnostic_patterns = [
+            r'\b(?:was |were )?diagnosed\s+(?:me\s+)?with\b',
+            r'\b(?:doctor|physician|they|clinician)\s+(?:said|told|confirmed)\s+(?:it\s+)?(?:was|is)\b',
+            r'\btold\s+me\s+(?:my\s+)?(?:injury|condition)\s+was\b',
+            r'\b(?:hospital|clinic|emergency(?:\s+room)?|er)\s+(?:said|told|confirmed)\b',
+            r'\bconfirmed\s+(?:it\s+was\s+)?(?:a\s+)?\w+\s+(?:injury|diagnosis)\b',
+            r'\bdiagnosis\s+(?:was|is)\b',
+        ]
+        
+        return any(re.search(pattern, text_lower) for pattern in diagnostic_patterns)
+    
     def extract_diagnosis(self, text: str, mode: str = "auto") -> str:
         """
-        Extract primary diagnosis from text with conservative approach
+        Extract primary diagnosis from text with conservative approach.
+        
+        GATING LOGIC:
+        1. Utterance mode: ONLY extract if explicit diagnostic confirmation
+        2. Transcript mode: Extract if explicit OR sufficient clinical context
         
         Args:
             text: Input text
             mode: 'utterance' (single statement), 'transcript' (full conversation), 'auto' (detect)
             
         Returns:
-            Diagnosis string or empty string if insufficient context
+            Diagnosis string or empty string if context doesn't permit extraction
         """
         text_lower = text.lower()
         
@@ -323,23 +358,21 @@ class MedicalNER:
         if mode == "auto":
             mode = self._detect_mode(text)
         
-        # STRICT: In utterance mode, NEVER infer diagnosis
+        # GATE 1: Utterance mode = only explicit confirmations allowed
         if mode == "utterance":
-            # Only return diagnosis if explicitly stated with confirmation patterns
-            if self._has_explicit_diagnosis_confirmation(text_lower):
+            if self.has_diagnostic_context(text):
                 return self._extract_confirmed_diagnosis(text_lower)
-            return ""  # No diagnosis for single utterances without explicit confirmation
+            return ""  # No diagnosis for utterances without explicit confirmation
         
-        # For transcript mode, require sufficient clinical context
-        if not self._has_sufficient_clinical_context(text_lower):
-            # Check for explicit diagnosis statements
-            if self._has_explicit_diagnosis_confirmation(text_lower):
-                return self._extract_confirmed_diagnosis(text_lower)
-            return ""  # No diagnosis without context
+        # GATE 2: Transcript mode = explicit confirmation OR sufficient clinical context
+        if self.has_diagnostic_context(text):
+            return self._extract_confirmed_diagnosis(text_lower)
         
-        # Only extract if diagnosis is explicitly mentioned in clinical context
-        diagnosis = self._extract_mentioned_diagnosis(text_lower)
-        return diagnosis if diagnosis else ""
+        if self._has_sufficient_clinical_context(text_lower):
+            diagnosis = self._extract_mentioned_diagnosis(text_lower)
+            return diagnosis if diagnosis else ""
+        
+        return ""  # No diagnosis without context
     
     def _detect_mode(self, text: str) -> str:
         """
@@ -367,34 +400,21 @@ class MedicalNER:
     
     def _has_explicit_diagnosis_confirmation(self, text_lower: str) -> bool:
         """
-        Check if text explicitly confirms a diagnosis
-        
-        Only returns True if diagnosis is stated with medical authority
+        Deprecated: Use has_diagnostic_context() instead.
+        Kept for backward compatibility.
         """
-        confirmation_patterns = [
-            r'diagnosed\s+with\s+\w+',
-            r'doctor\s+(?:said|told|confirmed|diagnosed)\s+(?:it\s+)?(?:was|is)\s+(?:a\s+)?\w+',
-            r'was\s+told\s+(?:it\s+)?(?:was|is)\s+(?:a\s+)?\w+',
-            r'confirmed\s+(?:as\s+)?(?:a\s+)?\w+\s+(?:injury|diagnosis|condition)',
-            r'medical\s+report\s+(?:showed|indicated|confirmed)',
-            r'(?:emergency|hospital|clinic)\s+(?:said|diagnosed|confirmed)',
-        ]
-        
-        for pattern in confirmation_patterns:
-            if re.search(pattern, text_lower):
-                return True
-        
-        return False
+        return self.has_diagnostic_context(text_lower)
     
     def _extract_confirmed_diagnosis(self, text_lower: str) -> str:
         """Extract explicitly confirmed diagnosis from text"""
         # Extract diagnosis only when explicitly stated
         diagnosis_patterns = [
-            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(whiplash\s+injury)', 'Whiplash injury'),
-            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(whiplash)', 'Whiplash'),
-            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(lower\s+back\s+strain)', 'Lower back strain'),
-            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(neck\s+injury)', 'Neck injury'),
-            (r'(?:diagnosed with|said it was|told it is|confirmed as)\s+(?:a\s+)?(back\s+injury)', 'Back injury'),
+            (r'(?:diagnosed\s+(?:me\s+)?with|said it was|(?:emergency\s+)?(?:room|hospital|clinic|er)\s+(?:said|confirmed)\s+(?:it\s+was\s+)?(?:a\s+)?|told (?:me )?(?:my )?injury was|confirmed (?:it was )?(?:a )?(?:was )?(?:a )?)\s*(?:a\s+)?(whiplash\s+injury)', 'Whiplash injury'),
+            (r'(?:diagnosed\s+(?:me\s+)?with|said it was|(?:emergency\s+)?(?:room|hospital|clinic|er)\s+(?:said|confirmed)\s+(?:it\s+was\s+)?(?:a\s+)?|told (?:me )?(?:my )?injury was|confirmed (?:it was )?(?:a )?)\s*(?:a\s+)?(whiplash)(?!\s+injury)', 'Whiplash'),
+            (r'(?:diagnosed\s+(?:me\s+)?with|said it was|(?:emergency\s+)?(?:room|hospital|clinic|er)\s+(?:said|confirmed)\s+(?:it\s+was\s+)?(?:a\s+)?|told it is|confirmed\s+(?:it\s+was\s+)?(?:a\s+)?)\s*(?:a\s+)?((?:lower\s+)?back\s+strain)', 'Lower back strain'),
+            (r'(?:diagnosed\s+(?:me\s+)?with|said it was|(?:emergency\s+)?(?:room|hospital|clinic|er)\s+(?:said|confirmed)\s+(?:it\s+was\s+)?(?:a\s+)?|told it is|confirmed)\s+(?:a\s+)?(neck\s+injury)', 'Neck injury'),
+            (r'(?:diagnosed\s+(?:me\s+)?with|said it was|(?:emergency\s+)?(?:room|hospital|clinic|er)\s+(?:said|confirmed)\s+(?:it\s+was\s+)?(?:a\s+)?|told it is|confirmed)\s+(?:a\s+)?(back\s+injury)', 'Back injury'),
+            (r'(?:diagnosed\s+(?:me\s+)?with|said it was|(?:emergency\s+)?(?:room|hospital|clinic|er)\s+(?:said|confirmed)\s+(?:it\s+was\s+)?|told it is|confirmed\s+(?:it\s+was\s+)?(?:a\s+)?)\s*(?:a\s+)?(strain)', 'Strain'),
         ]
         
         for pattern, diagnosis in diagnosis_patterns:
@@ -516,7 +536,12 @@ class MedicalNER:
     
     def extract_medical_entities(self, text: str, mode: str = "auto") -> Dict:
         """
-        Main method to extract all medical entities from transcript
+        Main method to extract all medical entities from transcript.
+        
+        GATING LOGIC:
+        - Symptoms: Always extracted when present
+        - Diagnosis: Gated by mode and diagnostic context
+        - Treatment: Always extracted when mentioned
         
         Args:
             text: Medical transcript text
@@ -525,15 +550,52 @@ class MedicalNER:
         Returns:
             Dictionary with structured medical information
         """
-        return {
+        # Extract all entities
+        entities = {
             "Patient_Name": self.extract_patient_name(text),
             "Date_of_Incident": self.extract_date_of_incident(text),
             "Symptoms": self.extract_symptoms(text),
-            "Diagnosis": self.extract_diagnosis(text, mode=mode),  # Use mode-aware extraction
+            "Diagnosis": self.extract_diagnosis(text, mode=mode),  # Context-aware gating applied inside
             "Treatment": self.extract_treatments(text),
             "Current_Status": self.extract_current_status(text),
             "Prognosis": self.extract_prognosis(text)
         }
+        
+        # Post-processing filters for known edge cases
+        entities = self._apply_safety_filters(entities, text)
+        
+        return entities
+    
+    def _apply_safety_filters(self, entities: Dict, text: str) -> Dict:
+        """
+        Apply post-extraction safety filters for known edge cases.
+        
+        These are explicit, documented exceptions - not lexical blacklists.
+        """
+        text_lower = text.lower()
+        
+        # Filter 1: Remove diagnosis terms from symptoms if in diagnostic context
+        # Rationale: "whiplash" should be diagnosis, not symptom
+        if self.has_diagnostic_context(text):
+            diagnosis_terms = {'whiplash', 'whiplash injury', 'injury', 'strain'}
+            entities['Symptoms'] = [s for s in entities['Symptoms'] 
+                                   if s.lower() not in diagnosis_terms]
+        
+        # Filter 2: Remove abstract pain mentions in worry/anxiety contexts
+        # Rationale: "worried this pain might not go away" is expressing concern, not reporting symptom
+        worry_patterns = [r'\b(worried|anxious|scared)\b.*\bpain\b', r'\bpain\b.*\bmight\s+not\b']
+        if any(re.search(p, text_lower) for p in worry_patterns):
+            entities['Symptoms'] = [s for s in entities['Symptoms'] 
+                                   if s.lower() not in {'pain', 'discomfort'}]
+        
+        # Filter 3: Remove treatment terms mistakenly extracted as symptoms
+        # Rationale: "physiotherapy sessions" is treatment history, not symptom
+        treatment_terms = {'sessions', 'physiotherapy', 'therapy', 'x-rays', 'x-ray'}
+        entities['Symptoms'] = [s for s in entities['Symptoms'] 
+                               if s.lower() not in treatment_terms and 
+                               not any(t in s.lower() for t in treatment_terms)]
+        
+        return entities
 
 
 class KeywordExtractor:

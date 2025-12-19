@@ -42,6 +42,21 @@ class SentimentAnalyzer:
         Returns:
             Sentiment label: 'Anxious', 'Neutral', or 'Reassured'
         """
+        # Check for neutral historical statements first
+        text_lower = text.lower()
+        neutral_patterns = [
+            r'\b(happened|went|had|took|checked|was|were|did)\b',
+            r'\blast\s+(week|month|year|september|january|february|march|april|may|june|july|august|october|november|december)\b',
+            r'\b(sessions?|hospital|doctor|physiotherapy|work|after)\b',
+            r'\b(diagnosed|said|told|confirmed)\b.*\b(was|is|injury|whiplash)\b',
+            r'\bwas\s+(?:not|no)\s+',
+            r'\b(?:not|no)\s+(?:required|fracture|serious)\b',
+        ]
+        
+        neutral_matches = sum(1 for pattern in neutral_patterns if re.search(pattern, text_lower))
+        if neutral_matches >= 2:
+            return 'Neutral'
+        
         if not self.sentiment_pipeline:
             return self._rule_based_sentiment(text)
         
@@ -69,6 +84,21 @@ class SentimentAnalyzer:
     def _rule_based_sentiment(self, text: str) -> str:
         """Fallback rule-based sentiment analysis"""
         text_lower = text.lower()
+        
+        # Neutral/informational indicators (check first)
+        neutral_patterns = [
+            r'\b(happened|went|had|took|checked|was|were|did)\b',
+            r'\blast\s+(week|month|year|september|january|february|march|april|may|june|july|august|october|november|december)\b',
+            r'\b(sessions?|hospital|doctor|physiotherapy|work)\b',
+            r'^\w+\s+(happened|went|had|took|was|were)',
+            r'\b(diagnosed|said|told|confirmed)\b.*\b(was|is|injury|whiplash)\b',
+            r'\bwas\s+(?:not|no)\s+',
+            r'\b(?:not|no)\s+(?:required|fracture|serious)\b',
+        ]
+        
+        neutral_matches = sum(1 for pattern in neutral_patterns if re.search(pattern, text_lower))
+        if neutral_matches >= 2:
+            return 'Neutral'
         
         # Anxiety indicators
         anxiety_words = [
