@@ -38,9 +38,13 @@ This project implements a comprehensive NLP pipeline for analyzing medical conve
 
 ### 1. Medical NLP Summarization
 
-- ✅ **Named Entity Recognition**: Extracts symptoms, treatments, diagnoses, and prognoses
+- ✅ **Hybrid Named Entity Recognition**: 
+  - **Rule-based extraction** for precise pattern matching
+  - **Transformer-based extraction** (`d4data/biomedical-ner-all`) for comprehensive coverage
+  - **Hybrid mode** combines both approaches for maximum accuracy
 - ✅ **Keyword Extraction**: Identifies important medical phrases
 - ✅ **Structured Summarization**: Converts conversations to JSON/text reports
+- ✅ **Multi-mode symptom detection**: Supports general symptoms (cough, fever) and specialized conditions (whiplash, trauma)
 
 ### 2. Sentiment & Intent Analysis
 
@@ -67,7 +71,9 @@ This project implements a comprehensive NLP pipeline for analyzing medical conve
 ┌─────────────────────────────────────────────────────────────┐
 │                    NLP Processing Pipeline                   │
 ├─────────────────────────────────────────────────────────────┤
-│  1. Medical NER (spaCy + Rule-based)                        │
+│  1. Hybrid Medical NER (Rule-based + Transformer)           │
+│     • d4data/biomedical-ner-all (Transformer)               │
+│     • spaCy + Pattern matching (Rules)                      │
 │  2. Keyword Extraction (Pattern matching)                   │
 │  3. Summarization (BART/Extractive)                         │
 │  4. Sentiment Analysis (DistilBERT)                         │
@@ -122,6 +128,8 @@ pip install scispacy
 pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.1/en_core_sci_sm-0.5.1.tar.gz
 ```
 
+**Note**: The transformer-based medical NER model (`d4data/biomedical-ner-all`) will be downloaded automatically on first use (266MB).
+
 ---
 
 ## 💻 Usage
@@ -155,11 +163,22 @@ The notebook provides:
 ```python
 from src.medical_ner import MedicalNER
 from src.sentiment_intent import SentimentIntentAnalyzer
-from src.soap_generator import SOAPNoteGenerator
-
-# Extract medical entities
+from src.soap_generator im using hybrid approach (default)
 ner = MedicalNER()
 entities = ner.extract_medical_entities(transcript)
+
+# Use rule-based only
+entities_rules = ner.extract_medical_entities(transcript)
+symptoms_rules = ner.extract_symptoms(transcript, use_transformer=False)
+
+# Use transformer only
+symptoms_ai = ner.extract_symptoms_transformer(transcript)
+
+# Compare all approaches
+comparison = ner.extract_symptoms_hybrid(transcript)
+print(f"Rule-based: {comparison['rule_based']}")
+print(f"Transformer: {comparison['transformer_based']}")
+print(f"Combined: {comparison['combined']}")
 
 # Analyze sentiment
 analyzer = SentimentIntentAnalyzer()
@@ -167,6 +186,22 @@ result = analyzer.analyze("I'm worried about my pain")
 
 # Generate SOAP note
 soap_gen = SOAPNoteGenerator()
+soap_note = soap_gen.generate_soap_note(transcript, entities)
+```Hybrid NER (Rule-based + Transformer)
+│   ├── medical_summarizer.py    # Text Summarization
+│   ├── sentiment_intent.py      # Sentiment & Intent Analysis
+│   └── soap_generator.py        # SOAP Note Generation
+│
+├── data/
+│   └── sample_transcript.json   # Sample physician-patient conversation
+│
+├── output/                       # Generated results
+│   └── analysis_results.json
+│
+├── main.py                       # Main application
+├── compare_ner.py                # Compare rule-based vs transformer NER
+├── analyze_quick.py              # Quick single-utterance analysis
+- Unique findings from each approachp_gen = SOAPNoteGenerator()
 soap_note = soap_gen.generate_soap_note(transcript, entities)
 ```
 

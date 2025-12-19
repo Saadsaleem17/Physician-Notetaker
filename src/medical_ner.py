@@ -24,11 +24,29 @@ class MedicalNER:
                 print("Warning: spaCy model not found. Please install: python -m spacy download en_core_web_sm")
                 self.nlp = None
         
+        # Load transformer-based medical NER pipeline
+        try:
+            from transformers import pipeline
+            self.transformer_ner = pipeline(
+                "ner",
+                model="d4data/biomedical-ner-all",
+                aggregation_strategy="simple",
+                device=-1  # CPU
+            )
+            print("✓ Transformer-based medical NER loaded")
+        except Exception as e:
+            print(f"Note: Transformer NER not available ({e})")
+            self.transformer_ner = None
+        
         # Medical keywords for rule-based extraction
         self.symptom_keywords = {
             'pain', 'ache', 'discomfort', 'hurt', 'soreness', 'stiffness', 
             'headache', 'backache', 'neck pain', 'back pain', 'shock',
-            'trouble sleeping', 'difficulty', 'tenderness', 'impact'
+            'trouble sleeping', 'difficulty', 'tenderness', 'impact',
+            'cough', 'fever', 'nausea', 'vomiting', 'fatigue', 'weakness',
+            'dizziness', 'shortness of breath', 'congestion', 'runny nose',
+            'sore throat', 'chills', 'sweating', 'rash', 'swelling',
+            'numbness', 'tingling', 'chest pain', 'abdominal pain'
         }
         
         self.treatment_keywords = {
@@ -62,30 +80,94 @@ class MedicalNER:
         
         return "Janet Jones"  # Default from context
     
-    def extract_symptoms(self, text: str) -> List[str]:
-        """Extract symptoms from text"""
+    def extract_symptoms(self, text: str, use_transformer: bool = True) -> List[str]:
+        """
+        Extract symptoms from text using hybrid approach
+        
+        Args:
+            text: Input text
+            use_transformer: If True, combines rule-based + transformer results
+            
+        Returns:
+            List of extracted symptoms
+        """
         symptoms = set()
         text_lower = text.lower()
         
-        # Rule-based extraction
+        # 1. RULE-BASED EXTRACTION
+        # Rule-based extraction - General symptom patterns
         symptom_patterns = [
+            # General "I am having/have" pattern
+            r'(?:i\s+am\s+having|i\s+have|having)\s+(?:a\s+)?([a-z\s]+?)(?:\s+doctor|\s+and|,|\.|$)',
+            # Pain patterns
             r'(?:pain|ache|hurt|discomfort|soreness|stiffness)\s+(?:in|on|at)\s+(?:my|the|their)?\s*([a-z\s]+?)(?:\.|,|;|\n)',
             r'(neck\s+(?:and\s+)?back\s+pain)',
             r'(head\s+impact|hit\s+(?:my\s+)?head)',
             r'(trouble\s+sleeping)',
             r'(occasional\s+backaches?)',
             r'(whiplash)',
+            # Specific symptoms
+            r'\b(cough(?:ing)?)\b',
+            r'\b(headaches?)\b',
+            r'\b(fever)\b',
+            r'\b(nausea)\b',
+            r'\b(vomiting)\b',
+            r'\b(fatigue)\b',
+            r'\b(dizziness)\b',
+            r'\b(shortness\s+of\s+breath)\b',
+            r'\b(chest\s+pain)\b',
+            r'\b(sore\s+throat)\b',
+            r'\b(runny\s+nose)\b',
+            r'\b(loss\s+of\s+appetite)\b',
+            r'\b(abdominal\s+pain)\b',
         ]
         
         for pattern in symptom_patterns:
             matches = re.finditer(pattern, text_lower)
             for match in matches:
+                # Get the captured symptom
                 symptom = match.group(1) if match.lastindex else match.group(0)
                 symptom = symptom.strip(' .,;')
+                # Clean up common filler words
+                symptom = re.sub(r'\b(doctor|and|but|so|very|really)\b', '', symptom).strip()
+                
                 if symptom and len(symptom) > 2:
                     symptoms.add(symptom.title())
         
-        # Keyword matching
+        # Keyword matching for common symptoms
+        common_symptoms = {
+            'cough': 'Cough',
+            'headache': 'Headache',
+            'headaches': 'Headache',
+            'fever': 'Fever',
+            'nausea': 'Nausea',
+            'fatigue': 'Fatigue',
+            'dizziness': 'Dizziness',
+            'vomiting': 'Vomiting',
+            'sore throat': 'Sore throat',
+            'chest pain': 'Chest pain',
+            'shortness of breath': 'Shortness of breath',
+            'runny nose': 'Runny nose',
+            'loss of appetite': 'Loss of appetite',
+        }
+        
+        for keyword, symptom_name in common_symptoms.items():
+            if keyword in text_lower:
+                symptoms.add(symptom_name)
+        
+        # Body part + feeling combinations (e.g., "lungs feel heavy")
+        body_feeling_patterns = [
+            (r'lungs?\s+feel\s+(heavy|tight|congested)', 'Heavy lungs'),
+            (r'chest\s+feels?\s+(tight|heavy|congested)', 'Chest tightness'),
+            (r'throat\s+feels?\s+(sore|scratchy|painful)', 'Sore throat'),
+            (r'head\s+feels?\s+(heavy|light|dizzy)', 'Head discomfort'),
+        ]
+        
+        for pattern, symptom_name in body_feeling_patterns:
+            if re.search(pattern, text_lower):
+                symptoms.add(symptom_name)
+        
+        # Legacy keyword matching for existing patterns
         for keyword in self.symptom_keywords:
             if keyword in text_lower:
                 if 'neck' in text_lower and 'pain' in keyword:
@@ -105,8 +187,91 @@ class MedicalNER:
             symptoms.add("Trouble sleeping")
         if 'occasional backache' in text_lower:
             symptoms.add("Occasional backache")
+        
+        # 2. TRANSFORMER-BASED EXTRACTION (if enabled and available)
+        if use_transformer and self.transformer_ner:
+            transformer_symptoms = self.extract_symptoms_transformer(text)
+            symptoms.update(transformer_symptoms)
             
         return sorted(list(symptoms))
+    
+    def extract_symptoms_transformer(self, text: str) -> List[str]:
+        """
+        Extract symptoms using transformer-based medical NER
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            List of extracted symptoms using transformer model
+        """
+        if not self.transformer_ner:
+            return []
+        
+        symptoms = set()
+        
+        try:
+            # Run transformer NER
+            ner_results = self.transformer_ner(text)
+            
+            # Extract entities related to symptoms/diseases/conditions
+            symptom_labels = [
+                'DISEASE',           # Disease names
+                'SIGN_SYMPTOM',      # Signs and symptoms
+                'SYMPTOM',           # Symptoms
+                'PROBLEM',           # Medical problems
+                'CLINICAL_EVENT',    # Clinical events
+            ]
+            
+            for entity in ner_results:
+                entity_type = entity.get('entity_group', entity.get('entity', ''))
+                symptom_text = entity['word'].strip()
+                
+                # Clean up transformer artifacts
+                symptom_text = symptom_text.replace('##', '').strip()
+                
+                # Skip if too short or common non-symptom words
+                if len(symptom_text) < 3:
+                    continue
+                
+                skip_words = {'patient', 'doctor', 'physician', 'having', 'feel', 'feels', 
+                             'been', 'severe', 'persistent', 'since', 'yesterday', 'heavy'}
+                if symptom_text.lower() in skip_words:
+                    continue
+                
+                # Check if entity is symptom-related with good confidence
+                if any(label in entity_type.upper() for label in symptom_labels):
+                    if entity['score'] > 0.7:  # Good confidence for labeled symptoms
+                        symptoms.add(symptom_text.title())
+                elif entity['score'] > 0.90:  # Very high confidence for unlabeled
+                    symptoms.add(symptom_text.title())
+        
+        except Exception as e:
+            print(f"Transformer NER error: {e}")
+            return []
+        
+        return sorted(list(symptoms))
+    
+    def extract_symptoms_hybrid(self, text: str) -> Dict[str, List[str]]:
+        """
+        Compare rule-based vs transformer-based symptom extraction
+        
+        Returns:
+            Dictionary with both methods' results and combined
+        """
+        rule_based = self.extract_symptoms(text)
+        transformer_based = self.extract_symptoms_transformer(text)
+        
+        # Combine both (union)
+        combined = sorted(list(set(rule_based) | set(transformer_based)))
+        
+        return {
+            'rule_based': rule_based,
+            'transformer_based': transformer_based,
+            'combined': combined,
+            'rule_only': sorted(list(set(rule_based) - set(transformer_based))),
+            'transformer_only': sorted(list(set(transformer_based) - set(rule_based))),
+        }
     
     def extract_treatments(self, text: str) -> List[str]:
         """Extract treatments from text"""
