@@ -22,31 +22,39 @@ class MedicalTranscriptionPipeline:
     Complete NLP pipeline for medical transcription analysis
     
     Features:
-    - Named Entity Recognition (NER)
+    - Hybrid Named Entity Recognition (Rule-based + Transformer)
     - Medical Summarization
     - Sentiment & Intent Analysis
     - SOAP Note Generation
     """
     
-    def __init__(self):
-        """Initialize all components"""
+    def __init__(self, use_hybrid_ner: bool = True):
+        """
+        Initialize all components
+        
+        Args:
+            use_hybrid_ner: If True, uses transformer + rule-based NER (default)
+        """
         print("Initializing Medical Transcription Pipeline...")
+        print(f"NER Mode: {'Hybrid (Transformer + Rules)' if use_hybrid_ner else 'Rule-based only'}")
         
         self.ner = MedicalNER()
+        self.use_hybrid_ner = use_hybrid_ner
         self.keyword_extractor = KeywordExtractor()
         self.summarizer = MedicalSummarizer()
         self.sentiment_analyzer = SentimentIntentAnalyzer()
         self.soap_generator = SOAPNoteGenerator()
         
-        print("✓ Pipeline initialized successfully!\n")
+        print(">> Pipeline initialized successfully!\n")
     
-    def process_transcript(self, transcript: str, verbose: bool = True) -> Dict:
+    def process_transcript(self, transcript: str, verbose: bool = True, show_ner_comparison: bool = False) -> Dict:
         """
         Process a medical transcript through the complete pipeline
         
         Args:
             transcript: Medical conversation transcript
             verbose: Print progress messages
+            show_ner_comparison: Show rule-based vs transformer comparison
             
         Returns:
             Dictionary with all analysis results
@@ -55,16 +63,33 @@ class MedicalTranscriptionPipeline:
         
         # 1. Named Entity Recognition
         if verbose:
-            print("📍 Step 1: Extracting Medical Entities (NER)...")
+            mode = "Hybrid NER" if self.use_hybrid_ner else "Rule-based NER"
+            print(f"[Step 1] Extracting Medical Entities ({mode})...")
+        
+        # Extract entities using configured mode
         entities = self.ner.extract_medical_entities(transcript)
         results['entities'] = entities
+        
+        # Optional: Show NER comparison
+        if show_ner_comparison and self.ner.transformer_ner:
+            if verbose:
+                print("\n   [NER Comparison]:")
+            comparison = self.ner.extract_symptoms_hybrid(transcript)
+            results['ner_comparison'] = comparison
+            if verbose:
+                print(f"      Rule-based: {len(comparison['rule_based'])} symptoms")
+                print(f"      Transformer: {len(comparison['transformer_based'])} symptoms")
+                print(f"      Combined: {len(comparison['combined'])} symptoms")
+                if comparison['transformer_only']:
+                    print(f"      [!] Transformer caught: {', '.join(comparison['transformer_only'][:3])}")
+        
         if verbose:
-            print(f"   Extracted: {len(entities.get('Symptoms', []))} symptoms, "
+            print(f"   >> Extracted: {len(entities.get('Symptoms', []))} symptoms, "
                   f"{len(entities.get('Treatment', []))} treatments")
         
         # 2. Keyword Extraction
         if verbose:
-            print("📍 Step 2: Extracting Medical Keywords...")
+            print("[Step 2] Extracting Medical Keywords...")
         keywords = self.keyword_extractor.extract_keywords(transcript)
         results['keywords'] = keywords
         if verbose:
@@ -72,17 +97,17 @@ class MedicalTranscriptionPipeline:
         
         # 3. Medical Summarization
         if verbose:
-            print("📍 Step 3: Generating Medical Summary...")
+            print("[Step 3] Generating Medical Summary...")
         structured_summary = self.summarizer.create_structured_summary(transcript, entities)
         json_summary = self.summarizer.generate_json_summary(entities)
         results['structured_summary'] = structured_summary
         results['json_summary'] = json_summary
         if verbose:
-            print("   ✓ Summary generated")
+            print("   >> Summary generated")
         
         # 4. Sentiment & Intent Analysis
         if verbose:
-            print("📍 Step 4: Analyzing Sentiment & Intent...")
+            print("[Step 4] Analyzing Sentiment & Intent...")
         conversation_analysis = self.sentiment_analyzer.analyze_conversation(transcript)
         results['sentiment_intent'] = conversation_analysis
         if verbose:
@@ -90,7 +115,7 @@ class MedicalTranscriptionPipeline:
         
         # 5. SOAP Note Generation
         if verbose:
-            print("📍 Step 5: Generating SOAP Note...")
+            print("[Step 5] Generating SOAP Note...")
         soap_note = self.soap_generator.generate_soap_note(transcript, entities)
         soap_text = self.soap_generator.format_soap_note_text(
             soap_note, 
@@ -99,10 +124,10 @@ class MedicalTranscriptionPipeline:
         results['soap_note'] = soap_note
         results['soap_note_text'] = soap_text
         if verbose:
-            print("   ✓ SOAP note generated")
+            print("   >> SOAP note generated")
         
         if verbose:
-            print("\n✅ Processing complete!\n")
+            print("\n>> Processing complete!\n")
         
         return results
     
@@ -145,7 +170,7 @@ def main():
     """Main function demonstrating the pipeline"""
     
     print("=" * 70)
-    print("Medical Transcription NLP Pipeline")
+    print("Medical Transcription NLP Pipeline - Hybrid NER Edition")
     print("=" * 70)
     print()
     
@@ -169,11 +194,11 @@ def main():
         within six months of the accident.
         """
     
-    # Initialize pipeline
-    pipeline = MedicalTranscriptionPipeline()
+    # Initialize pipeline with hybrid NER (default)
+    pipeline = MedicalTranscriptionPipeline(use_hybrid_ner=True)
     
-    # Process transcript
-    results = pipeline.process_transcript(transcript, verbose=True)
+    # Process transcript with NER comparison
+    results = pipeline.process_transcript(transcript, verbose=True, show_ner_comparison=True)
     
     # Display results
     print("\n" + "=" * 70)
@@ -182,6 +207,16 @@ def main():
     
     print("\n1. EXTRACTED ENTITIES:")
     print(json.dumps(results['json_summary'], indent=2))
+    
+    # Show NER comparison if available
+    if 'ner_comparison' in results:
+        print("\n1b. NER EXTRACTION COMPARISON:")
+        comparison = results['ner_comparison']
+        print(f"   Rule-based found: {comparison['rule_based']}")
+        print(f"   Transformer found: {comparison['transformer_based']}")
+        print(f"   Combined result: {comparison['combined']}")
+        if comparison['transformer_only']:
+            print(f"   [!] Transformer uniquely caught: {comparison['transformer_only']}")
     
     print("\n2. KEY MEDICAL PHRASES:")
     for i, keyword in enumerate(results['keywords'], 1):
@@ -204,18 +239,24 @@ def main():
     
     # Example: Analyze single utterance
     print("\n" + "=" * 70)
-    print("SINGLE UTTERANCE ANALYSIS EXAMPLE")
+    print("SINGLE UTTERANCE ANALYSIS EXAMPLE (with Hybrid NER)")
     print("=" * 70)
     
-    sample_utterance = "I'm a bit worried about my back pain, but I hope it gets better soon."
+    sample_utterance = "I have severe cough, fever, and my lungs feel heavy."
     print(f"\nText: \"{sample_utterance}\"")
     
+    # Extract symptoms using hybrid approach
+    utterance_entities = pipeline.ner.extract_medical_entities(sample_utterance, mode='utterance')
+    print(f"\nSymptoms Detected: {utterance_entities['Symptoms']}")
+    
+    # Sentiment analysis
     analysis = pipeline.analyze_single_utterance(sample_utterance)
     print(f"Sentiment: {analysis['Sentiment']}")
     print(f"Intent: {analysis['Intent']}")
     
     print("\n" + "=" * 70)
     print("Pipeline execution completed successfully!")
+    print("[!] Tip: Run 'python compare_ner.py' to see detailed NER comparison")
     print("=" * 70)
 
 

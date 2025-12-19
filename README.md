@@ -233,7 +233,54 @@ Physician Notetaker/
 
 ---
 
-## 📊 Examples
+## � NER Comparison: Rule-Based vs Transformer
+
+### Example Test Case
+
+**Input:**
+```
+"I am having cough doctor my lungs feel heavy and I am having headaches"
+```
+
+**Rule-Based Results:**
+- ✓ Cough
+- ✓ Headache
+- ✓ Heavy lungs
+
+**Transformer-Based Results:**
+- ✓ Cough
+- ✓ Headaches
+- ✓ Lungs (detected body part)
+
+**Combined (Hybrid) Results:**
+- ✓ Cough
+- ✓ Headache
+- ✓ Headaches
+- ✓ Heavy lungs
+- ✓ Lungs
+
+### When to Use Each Mode
+
+| Mode | Best For | Pros | Cons |
+|------|----------|------|------|
+| **Hybrid** | Production use | Maximum coverage, robust | Slightly slower, may have duplicates |
+| **Rule-based** | Known patterns | Fast, precise, explainable | Limited to predefined patterns |
+| **Transformer** | Diverse symptoms | Handles variations well | May extract partial words |
+
+### Run Comparison Tool
+
+```powershell
+python compare_ner.py
+```
+
+This will test both approaches across multiple medical scenarios and show:
+- Side-by-side extraction results
+- Unique findings from each method
+- Combined coverage statistics
+
+---
+
+## �📊 Examples
 
 ### Input: Raw Transcript
 
@@ -295,20 +342,61 @@ Patient: Yes, I had ten physiotherapy sessions, and now I only have occasional b
 
 ### 1. Medical NER Implementation
 
-**Approach:**
-- **Hybrid**: Rule-based + Pattern matching
-- **Libraries**: spaCy, regex
-- **Entities**: Symptoms, Treatments, Diagnosis, Prognosis, Patient Name, Dates
+**Hybrid Approach:**
+- **Transformer-based**: `d4data/biomedical-ner-all` for comprehensive medical entity recognition
+- **Rule-based**: Pattern matching + spaCy for precise extraction
+- **Combined**: Both methods work together for maximum symptom coverage
+
+**Three Extraction Modes:**
+
+1. **Hybrid Mode (Default)** - Best coverage
+```python
+ner = MedicalNER()
+entities = ner.extract_medical_entities(text)
+# Uses transformer + rule-based extraction
+```
+
+2. **Rule-based Only** - Precise, lightweight
+```python
+symptoms = ner.extract_symptoms(text, use_transformer=False)
+# Uses only pattern matching and rules
+```
+
+3. **Transformer Only** - AI-powered
+```python
+symptoms = ner.extract_symptoms_transformer(text)
+# Uses only the biomedical NER model
+```
+
+**Comparison Tool:**
+```python
+comparison = ner.extract_symptoms_hybrid(text)
+# Returns:
+# - rule_based: symptoms found by rules
+# - transformer_based: symptoms found by AI
+# - combined: union of both
+# - rule_only: unique to rules
+# - transformer_only: unique to AI
+```
+
+**Entities Extracted:**
+- Symptoms (general + specialized)
+- Treatments
+- Diagnosis
+- Prognosis
+- Patient Name
+- Dates
 
 **Handling Ambiguous Data:**
 - Context-based inference from surrounding sentences
 - Fallback to default values for missing information
-- Pattern matching for common medical phrases
-- Multiple extraction strategies with prioritization
+- Multiple extraction strategies with confidence scoring
+- Conservative approach to prevent hallucination
 
 **Models Used:**
-- `en_core_web_sm` (default)
-- `en_core_sci_sm` (medical, optional)
+- `d4data/biomedical-ner-all` - Transformer-based medical NER (266MB)
+- `en_core_web_sm` - spaCy general model (default)
+- `en_core_sci_sm` - spaCy medical model (optional)
 - Custom rule-based extractors
 
 ### 2. Summarization
