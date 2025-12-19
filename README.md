@@ -640,9 +640,9 @@ MIT License - See LICENSE file for details
 
 ---
 
-## 👥 Authors
+## 👥 Author
 
-Medical NLP Team - 2024
+Saad Salim
 
 ---
 
