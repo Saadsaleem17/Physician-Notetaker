@@ -4,10 +4,252 @@ Extracts symptoms, treatments, diagnoses, and prognoses from medical transcripts
 """
 
 import spacy
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple, Optional
 import re
 from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
-from .diagnosis_inference import DiagnosisInferenceLayer
+
+
+class DiagnosisInferenceLayer:
+    """
+    Infer diagnosis from medical transcript using rule-guided inference
+    
+    NOT rule-based extraction (too brittle)
+    NOT pure LLM (hallucinates)
+    HYBRID: Controlled heuristics with semantic soft-matching
+    """
+    
+    def __init__(self):
+        """Initialize diagnosis vocabulary and linguistic triggers"""
+        
+        # Curated diagnosis vocabulary with symptom/body-part compatibility
+        self.diagnosis_vocab = {
+            'whiplash': {
+                'normalized': 'Whiplash Injury',
+                'keywords': ['whiplash', 'whiplash injury'],
+                'compatible_body_parts': ['neck', 'back', 'head'],
+                'compatible_symptoms': ['neck pain', 'back pain', 'head impact', 'stiffness'],
+            },
+            'sprain': {
+                'normalized': 'Sprain',
+                'keywords': ['sprain', 'sprained'],
+                'compatible_body_parts': ['wrist', 'ankle', 'knee', 'hand', 'foot'],
+                'compatible_symptoms': ['pain', 'swelling', 'stiffness'],
+            },
+            'wrist_sprain': {
+                'normalized': 'Wrist Sprain',
+                'keywords': ['wrist sprain'],
+                'compatible_body_parts': ['wrist', 'hand'],
+                'compatible_symptoms': ['wrist pain', 'wrist swelling', 'wrist stiffness'],
+            },
+            'mechanical_back_pain': {
+                'normalized': 'Mechanical Lower Back Pain',
+                'keywords': ['mechanical back pain', 'mechanical lower back pain', 
+                           'posture-related back pain', 'posture-related mechanical back pain'],
+                'compatible_body_parts': ['back', 'lower back', 'spine'],
+                'compatible_symptoms': ['back pain', 'lower back pain', 'stiffness'],
+            },
+            'soft_tissue_injury': {
+                'normalized': 'Soft Tissue Injury',
+                'keywords': ['soft tissue injury', 'resolving soft tissue injury'],
+                'compatible_body_parts': ['wrist', 'hand', 'arm', 'leg', 'knee', 'ankle'],
+                'compatible_symptoms': ['pain', 'swelling', 'stiffness'],
+            },
+            'strain': {
+                'normalized': 'Strain',
+                'keywords': ['strain', 'muscle strain', 'back strain', 'lower back strain'],
+                'compatible_body_parts': ['back', 'neck', 'leg', 'arm'],
+                'compatible_symptoms': ['pain', 'stiffness', 'ache'],
+            },
+            'rotator_cuff_shoulder_strain': {
+                'normalized': 'Rotator Cuff-Related Shoulder Strain',
+                'keywords': ['rotator cuff', 'rotator cuff related shoulder strain', 'shoulder strain'],
+                'compatible_body_parts': ['shoulder', 'arm', 'upper arm'],
+                'compatible_symptoms': ['shoulder pain', 'upper arm pain', 'weakness', 'pain on overhead movement'],
+            },
+            'concussion': {
+                'normalized': 'Concussion',
+                'keywords': ['concussion', 'minor concussion', 'head trauma'],
+                'compatible_body_parts': ['head', 'brain'],
+                'compatible_symptoms': ['headache', 'dizziness', 'head impact', 'confusion'],
+            },
+        }
+        
+        # Soft linguistic triggers for diagnosis mentions
+        self.physician_triggers = [
+            r'\b(?:this\s+)?(?:appears\s+to\s+be|is)\s+(?:a\s+|an\s+)?',
+            r'\b(?:consistent\s+with|likely|suggests?)\s+(?:a\s+|an\s+)?',
+            r'\b(?:diagnosed?\s+(?:with|as)|said\s+(?:it\s+)?was)\s+(?:a\s+|an\s+)?',
+            r'\b(?:just\s+)?(?:a\s+|an\s+)',
+            r'\bconfirmed\s+(?:a\s+|an\s+)?',
+        ]
+        
+    def extract_physician_statements(self, text: str) -> List[str]:
+        """Extract sentences where physician is speaking"""
+        statements = []
+        sections = re.split(r'\n\n(?=Physician:|Patient:)', text, flags=re.IGNORECASE)
+        
+        for section in sections:
+            if section.strip().lower().startswith('physician:'):
+                statement = re.sub(r'^Physician:\s*', '', section, flags=re.IGNORECASE)
+                statements.append(statement.strip())
+        
+        return statements
+    
+    def find_diagnosis_mentions(self, text: str, speaker: str = 'all') -> List[Tuple[str, str, float]]:
+        """Find potential diagnosis mentions with confidence scoring"""
+        matches = []
+        text_lower = text.lower()
+        
+        if speaker == 'physician':
+            physician_statements = self.extract_physician_statements(text)
+            search_text = ' '.join(physician_statements).lower()
+        else:
+            search_text = text_lower
+        
+        for diag_key, diag_info in self.diagnosis_vocab.items():
+            for keyword in diag_info['keywords']:
+                if keyword in search_text:
+                    confidence = self._calculate_confidence(
+                        keyword, search_text, text_lower, speaker == 'physician'
+                    )
+                    if confidence > 0.3:
+                        matches.append((diag_key, keyword, confidence))
+        
+        return matches
+    
+    def _calculate_confidence(self, keyword: str, search_text: str, 
+                             full_text: str, is_physician: bool) -> float:
+        """Calculate confidence score for diagnosis mention"""
+        confidence = 0.3
+        
+        negation_pattern = rf'\b(?:no|not|without|rule\s+out)\s+(?:\w+\s+){{0,3}}{re.escape(keyword)}\b'
+        if re.search(negation_pattern, full_text.lower()):
+            return 0.0
+        
+        if is_physician:
+            confidence += 0.4
+        
+        for trigger in self.physician_triggers:
+            pattern = rf'{trigger}(?:\w+\s+){{0,3}}{re.escape(keyword)}\b'
+            if re.search(pattern, search_text):
+                confidence += 0.3
+                break
+        
+        return min(confidence, 1.0)
+    
+    def check_symptom_compatibility(self, diagnosis_key: str, symptoms: List[str], 
+                                   body_parts: List[str]) -> float:
+        """Check if extracted symptoms/body parts are compatible with diagnosis"""
+        if diagnosis_key not in self.diagnosis_vocab:
+            return 0.0
+        
+        diag_info = self.diagnosis_vocab[diagnosis_key]
+        score = 0.0
+        
+        symptoms_lower = [s.lower() for s in symptoms]
+        body_parts_lower = [b.lower() for b in body_parts]
+        
+        compatible_body_parts = diag_info['compatible_body_parts']
+        compatible_symptoms = diag_info['compatible_symptoms']
+        
+        body_matches = sum(1 for bp in body_parts_lower 
+                          if any(cbp in bp for cbp in compatible_body_parts))
+        if body_matches > 0:
+            score += 0.3
+        
+        symptom_matches = sum(1 for sym in symptoms_lower 
+                             if any(cs in sym for cs in compatible_symptoms))
+        if symptom_matches > 0:
+            score += 0.4
+        
+        if symptom_matches >= 2 or body_matches >= 1:
+            score += 0.3
+        
+        return min(score, 1.0)
+    
+    def infer_diagnosis(self, transcript: str, extracted_symptoms: List[str], 
+                       extracted_body_parts: List[str] = None) -> Dict:
+        """Main inference method: infer diagnosis from all available signals"""
+        if extracted_body_parts is None:
+            extracted_body_parts = self._extract_body_parts_simple(transcript)
+        
+        physician_mentions = self.find_diagnosis_mentions(transcript, speaker='physician')
+        all_mentions = self.find_diagnosis_mentions(transcript, speaker='all')
+        
+        candidates = []
+        
+        for diag_key, keyword, base_confidence in physician_mentions:
+            compat_score = self.check_symptom_compatibility(
+                diag_key, extracted_symptoms, extracted_body_parts
+            )
+            final_confidence = (base_confidence * 0.7) + (compat_score * 0.3)
+            evidence = self._extract_evidence_sentence(transcript, keyword)
+            
+            candidates.append({
+                'diagnosis_key': diag_key,
+                'normalized': self.diagnosis_vocab[diag_key]['normalized'],
+                'confidence': final_confidence,
+                'evidence': evidence,
+                'keyword': keyword,
+                'source': 'physician'
+            })
+        
+        if not candidates:
+            for diag_key, keyword, base_confidence in all_mentions:
+                compat_score = self.check_symptom_compatibility(
+                    diag_key, extracted_symptoms, extracted_body_parts
+                )
+                final_confidence = (base_confidence * 0.6) + (compat_score * 0.4)
+                evidence = self._extract_evidence_sentence(transcript, keyword)
+                
+                candidates.append({
+                    'diagnosis_key': diag_key,
+                    'normalized': self.diagnosis_vocab[diag_key]['normalized'],
+                    'confidence': final_confidence,
+                    'evidence': evidence,
+                    'keyword': keyword,
+                    'source': 'general'
+                })
+        
+        if candidates:
+            best = max(candidates, key=lambda x: x['confidence'])
+            return {
+                'diagnosis': best['normalized'],
+                'confidence': round(best['confidence'], 2),
+                'evidence_sentences': [best['evidence']],
+                'reasoning': f"Detected '{best['keyword']}' from {best['source']} speech with {round(best['confidence']*100)}% confidence"
+            }
+        
+        return {
+            'diagnosis': '',
+            'confidence': 0.0,
+            'evidence_sentences': [],
+            'reasoning': 'No diagnosis mentioned or insufficient evidence'
+        }
+    
+    def _extract_body_parts_simple(self, text: str) -> List[str]:
+        """Simple body part extraction as fallback"""
+        body_parts = []
+        text_lower = text.lower()
+        
+        common_parts = ['wrist', 'hand', 'neck', 'back', 'head', 'chest', 'shoulder', 
+                       'knee', 'ankle', 'elbow', 'hip', 'foot', 'leg', 'arm', 'spine']
+        
+        for part in common_parts:
+            if part in text_lower:
+                body_parts.append(part)
+        
+        return body_parts
+    
+    def _extract_evidence_sentence(self, text: str, keyword: str) -> str:
+        """Extract the sentence containing the diagnosis keyword"""
+        sentences = re.split(r'[.!?]+', text)
+        
+        for sentence in sentences:
+            if keyword.lower() in sentence.lower():
+                return sentence.strip()
+        
+        return ""
 
 
 class MedicalNER:

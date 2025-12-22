@@ -1,52 +1,61 @@
 # Medical Transcription NLP Pipeline
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-![NLP](https://img.shields.io/badge/NLP-Medical-red)
-
-An AI-powered system for **medical transcription, NLP-based summarization, and sentiment analysis** of physician-patient conversations.
-
-## 📋 Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Architecture](#architecture)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Examples](#examples)
-- [Technical Details](#technical-details)
-- [Future Enhancements](#future-enhancements)
+A production-grade Natural Language Processing pipeline for analyzing medical consultation transcripts and generating structured clinical documentation. This system extracts medical entities, performs sentiment analysis, and automatically generates SOAP notes from physician-patient conversations.
 
 ---
 
-## 🎯 Overview
+## Overview
 
-This project implements a comprehensive NLP pipeline for analyzing medical conversations between physicians and patients. It extracts key medical information, analyzes patient sentiment, and generates structured clinical documentation.
-
-### Key Capabilities:
-
-1. **Medical Named Entity Recognition (NER)** - Extract symptoms, treatments, diagnoses, and prognoses
-2. **Text Summarization** - Convert transcripts into structured medical reports
-3. **Sentiment Analysis** - Detect patient emotions (Anxious/Neutral/Reassured)
-4. **Intent Detection** - Identify patient communication goals
-5. **SOAP Note Generation** - Automated clinical documentation
+This pipeline processes raw medical transcripts and produces:
+- **Structured Medical Entities**: Symptoms, diagnoses, treatments, investigations, prognosis
+- **SOAP Notes**: Clinical documentation in Subjective-Objective-Assessment-Plan format
+- **Sentiment & Intent Analysis**: Patient communication patterns and emotional states
+- **Medical Keyword Extraction**: Key clinical phrases and terminology
+- **JSON Summary**: Machine-readable structured output for downstream systems
 
 ---
 
-## ✨ Features
+## Technical Approach
 
-### 1. Medical NLP Summarization
+### Architecture
 
-- ✅ **Hybrid Named Entity Recognition**: 
-  - **Rule-based extraction** for precise pattern matching
-  - **Transformer-based extraction** (`d4data/biomedical-ner-all`) for comprehensive coverage
-  - **Hybrid mode** combines both approaches for maximum accuracy
-- ✅ **Keyword Extraction**: Identifies important medical phrases
-- ✅ **Structured Summarization**: Converts conversations to JSON/text reports
-- ✅ **Multi-mode symptom detection**: Supports general symptoms (cough, fever) and specialized conditions (whiplash, trauma)
+The pipeline uses a **hybrid NLP approach** combining rule-based extraction with transformer models:
 
-### 2. Sentiment & Intent Analysis
+1. **Named Entity Recognition (NER)**
+   - **Hybrid Method**: Rule-based patterns + BioBERT transformer model
+   - Extracts: Symptoms, Diagnosis, Treatment, Investigations, Prognosis, Current Status
+   - **Symptom Validation**: Multi-stage filtering to prevent hallucinations
+   - **Negation Handling**: Context-aware negation detection (e.g., "no X-ray" ≠ performed)
+   - **Body-Part Scoped Extraction**: Symptoms linked to specific anatomical regions
+
+2. **Diagnosis Inference Layer**
+   - **Confidence Scoring**: Weighs physician statements, linguistic triggers, symptom compatibility
+   - **Speaker-Aware**: Prioritizes physician diagnostic statements over patient mentions
+   - **Evidence Tracking**: Returns source sentences and reasoning for auditability
+
+3. **Investigation Status Tracking**
+   - **Three-State Model**: Performed / Considered / Negated
+   - **Clinical Accuracy**: Prevents "no X-ray" from appearing as "investigation performed"
+   - **Context Preservation**: Distinguishes between "exam done" and "MRI discussed if symptoms worsen"
+
+4. **SOAP Note Generation**
+   - **Narrative Chief Complaint**: Converts symptom lists to clinical narratives
+   - **Temporal HPI**: Separates historical vs. current symptoms
+   - **Evidence-Based Objective**: Uses documented exam findings, not inferred observations
+   - **Structured Assessment & Plan**: Diagnosis severity grading and follow-up recommendations
+
+5. **Sentiment & Intent Analysis**
+   - **DistilBERT Sentiment Model**: Fine-tuned for medical dialogue
+   - **Intent Classification**: 8 categories (Answering questions, Reporting symptoms, Seeking reassurance, etc.)
+   - **Pattern Priority**: Ordered rule matching to prevent misclassification
+   - **Word Count Validation**: Prevents long symptom descriptions from being classified as short answers
+
+### Key Design Principles
+
+- **No Hallucinations**: Strict gating prevents extraction without explicit textual evidence
+- **Clinical Accuracy**: Follows medical documentation standards (e.g., no speculative diagnoses)
+- **Transparency**: All extracted entities traceable to source text
+- **Modular Architecture**: Separate concerns (NER, SOAP, Sentiment) for maintainability
 
 - ✅ **Sentiment Classification**: Anxious, Neutral, or Reassured
 - ✅ **Intent Detection**: Seeking reassurance, reporting symptoms, expressing concern, etc.
