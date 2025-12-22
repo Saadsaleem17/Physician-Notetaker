@@ -71,3 +71,5 @@ htmlcov/
 # Documentation builds
 docs/_build/
 
+# Archive folder (old files, tests, documentation)
+archive/
