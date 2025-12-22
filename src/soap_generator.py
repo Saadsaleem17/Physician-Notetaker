@@ -16,129 +16,170 @@ class SOAPNoteGenerator:
         pass
     
     def extract_subjective(self, transcript: str, entities: Dict) -> Dict:
-        """
-        Extract Subjective section (patient-reported information)
-        
-        Args:
-            transcript: Full conversation transcript
-            entities: Extracted medical entities
-            
-        Returns:
-            Dictionary with subjective information
-        """
+        """Build Subjective section using structured entities (no raw transcript replay)."""
         subjective = {
             "Chief_Complaint": "",
             "History_of_Present_Illness": ""
         }
-        
-        # Extract chief complaint from symptoms
+
         symptoms = entities.get('Symptoms', [])
-        if symptoms:
+        onset = entities.get('Onset', 'Unknown')
+        duration = entities.get('Duration', 'Unknown')
+        current_status = entities.get('Current_Status', '')
+        
+        # Classify symptoms for better presentation
+        event_symptoms = [s for s in symptoms if any(kw in s.lower() for kw in ['impact', 'trauma', 'injury', 'accident'])]
+        msk_symptoms = [s for s in symptoms if any(kw in s.lower() for kw in ['pain', 'ache', 'stiffness', 'swelling'])]
+        functional_symptoms = [s for s in symptoms if any(kw in s.lower() for kw in ['sleep', 'difficulty', 'trouble', 'weakness'])]
+
+        # Chief complaint: narrative style
+        if msk_symptoms:
+            # Build narrative: "neck and back pain following a car accident"
+            pain_parts = []
+            if any('neck' in s.lower() for s in msk_symptoms):
+                pain_parts.append('neck')
+            if any('back' in s.lower() for s in msk_symptoms):
+                pain_parts.append('back')
+            if any('shoulder' in s.lower() for s in msk_symptoms):
+                pain_parts.append('shoulder')
+            if any('wrist' in s.lower() for s in msk_symptoms):
+                pain_parts.append('wrist')
+            
+            if pain_parts:
+                pain_desc = ' and '.join(pain_parts) + ' pain'
+            else:
+                pain_desc = msk_symptoms[0].lower()
+            
+            # Add context if event present
+            text_lower = transcript.lower()
+            if 'car accident' in text_lower or 'accident' in text_lower:
+                subjective["Chief_Complaint"] = f"{pain_desc.capitalize()} following a car accident"
+            elif 'fall' in text_lower or 'fell' in text_lower:
+                subjective["Chief_Complaint"] = f"{pain_desc.capitalize()} following a fall"
+            else:
+                subjective["Chief_Complaint"] = pain_desc.capitalize()
+        elif symptoms:
             subjective["Chief_Complaint"] = ", ".join(symptoms[:3])
         else:
             subjective["Chief_Complaint"] = "Pain and discomfort"
-        
-        # Extract HPI from transcript
-        hpi_parts = []
-        
-        # Look for accident/incident description
-        accident_match = re.search(
-            r'patient:.*?((?:car\s+)?accident[^.]+(?:\.[^.]+){0,2})',
-            transcript.lower(),
-            re.DOTALL
-        )
-        if accident_match:
-            hpi_parts.append(accident_match.group(1).strip().capitalize())
-        
-        # Look for symptom progression
-        progression_patterns = [
-            r'patient:.*?(first\s+four\s+weeks[^.]+(?:\.[^.]+){0,1})',
-            r'patient:.*?(pain[^.]+for\s+(?:four|4)\s+weeks[^.]*)',
-        ]
-        for pattern in progression_patterns:
-            match = re.search(pattern, transcript.lower(), re.DOTALL)
-            if match:
-                text = match.group(1).strip()
-                if text not in str(hpi_parts):
-                    hpi_parts.append(text.capitalize())
-        
-        # Look for current status
-        current_status = entities.get('Current_Status', '')
-        if current_status:
-            hpi_parts.append(f"Currently experiencing {current_status.lower()}.")
-        
-        # Combine HPI
-        if hpi_parts:
-            subjective["History_of_Present_Illness"] = " ".join(hpi_parts)
+
+        # HPI synthesized from structured fields only
+        # Split symptoms into historical vs current based on current_status body part hints
+        current_parts = []
+        for part in ['back', 'neck', 'shoulder', 'arm', 'wrist', 'leg', 'knee']:
+            if part in current_status.lower():
+                current_parts.append(part)
+
+        current_symptoms = []
+        historical_symptoms = []
+        for s in symptoms:
+            s_low = s.lower()
+            if any(bp in s_low for bp in current_parts):
+                current_symptoms.append(s)
+            else:
+                historical_symptoms.append(s)
+
+        hpi_fragments = []
+        if historical_symptoms and duration and duration != 'Unknown':
+            hpi_fragments.append(f"Initially had {', '.join(historical_symptoms)} for {duration}")
+        elif historical_symptoms:
+            hpi_fragments.append(f"Initially had {', '.join(historical_symptoms)}")
+
+        if current_symptoms:
+            hpi_fragments.append(f"Currently reports {', '.join(current_symptoms)}")
+        elif current_status:
+            hpi_fragments.append(f"Current status: {current_status}")
+
+        if onset and onset != 'Unknown':
+            hpi_fragments.insert(0, f"Onset was {onset.lower()}")
+
+        if hpi_fragments:
+            subjective["History_of_Present_Illness"] = ". ".join(hpi_fragments) + "."
         else:
-            # Fallback HPI
-            incident_date = entities.get('Date_of_Incident', 'last month')
-            diagnosis = entities.get('Diagnosis', 'injury')
-            treatments = entities.get('Treatment', [])
-            
-            hpi = f"Patient had a car accident on {incident_date}, "
-            hpi += f"resulting in {diagnosis.lower()}. "
-            if treatments:
-                hpi += f"Received treatment including {', '.join(treatments[:2]).lower()}. "
-            hpi += f"{current_status}."
-            
-            subjective["History_of_Present_Illness"] = hpi
-        
+            subjective["History_of_Present_Illness"] = "History not documented."
+
         return subjective
     
-    def extract_objective(self, transcript: str) -> Dict:
-        """
-        Extract Objective section (physician observations and measurements)
-        
-        Args:
-            transcript: Full conversation transcript
-            
-        Returns:
-            Dictionary with objective information
-        """
+    def extract_objective(self, transcript: str, entities: Dict) -> Dict:
+        """Build Objective section using transcript findings when available."""
         objective = {
             "Physical_Exam": "",
             "Observations": ""
         }
-        
-        # Extract physical examination findings
-        exam_patterns = [
-            r'(?:physical\s+)?examination[^.]*?:(.*?)(?:patient:|physician:|$)',
-            r'everything\s+looks\s+good[^.]*\.(.*?)(?:patient:|physician:|$)',
-            r'(?:your|the)\s+neck\s+and\s+back[^.]+\.',
-        ]
-        
-        exam_findings = []
-        for pattern in exam_patterns:
-            match = re.search(pattern, transcript.lower(), re.DOTALL)
-            if match:
-                finding = match.group(1) if match.lastindex else match.group(0)
-                finding = finding.strip()
-                if finding and len(finding) > 10:
-                    exam_findings.append(finding)
-        
-        # Look for specific findings
-        if 'full range of movement' in transcript.lower() or 'full range of motion' in transcript.lower():
-            objective["Physical_Exam"] = "Full range of motion in cervical and lumbar spine, no tenderness."
-        elif exam_findings:
-            objective["Physical_Exam"] = " ".join(exam_findings[:2]).capitalize()
+
+        text_lower = transcript.lower()
+        findings = []
+
+        if ('full range of motion' in text_lower or 'full range of movement' in text_lower or 'near full range of motion' in text_lower):
+            if 'shoulder' in text_lower:
+                findings.append("Near full range of motion of the right shoulder")
+            if 'neck' in text_lower or 'cervical' in text_lower:
+                findings.append("Full range of movement in the neck")
+            if 'back' in text_lower or 'lumbar' in text_lower:
+                findings.append("Full range of movement in the back")
+        if re.search(r'overhead\s+(?:movement|motion)[^.]*pain', text_lower) or 'pain on overhead movement' in text_lower:
+            findings.append("Mild pain on overhead movement")
+        if 'strength' in text_lower and ('reduced' in text_lower or 'weaker' in text_lower):
+            findings.append("Strength mildly reduced due to pain")
+        if 'no neurological deficits' in text_lower or 'no neurologic deficits' in text_lower:
+            findings.append("No neurological deficits")
+        if 'no tenderness' in text_lower:
+            findings.append("No tenderness")
+        if 'no signs of lasting damage' in text_lower:
+            findings.append("No signs of lasting damage")
+
+        if findings:
+            objective["Physical_Exam"] = ". ".join(findings) + "."
         else:
-            objective["Physical_Exam"] = "Physical examination conducted. No acute distress noted."
-        
-        # Extract observations
-        observations = []
-        if 'normal' in transcript.lower() and 'health' in transcript.lower():
-            observations.append("Patient appears in normal health")
-        if 'no tenderness' in transcript.lower():
-            observations.append("no tenderness")
-        if 'normal gait' in transcript.lower() or 'walking normally' in transcript.lower():
-            observations.append("normal gait")
-        
-        if observations:
-            objective["Observations"] = ", ".join(observations).capitalize() + "."
+            objective["Physical_Exam"] = "Physical examination details not documented in transcript."
+
+        investigations = entities.get('Investigations', {})
+        if isinstance(investigations, list):
+            # Backward compatibility: treat legacy list as performed
+            performed = investigations
+            considered = []
+            negated = []
         else:
-            objective["Observations"] = "Patient appears comfortable, normal affect."
+            performed = investigations.get('performed', [])
+            considered = investigations.get('considered', [])
+            negated = investigations.get('negated', [])
+
+        observation_parts = []
+
+        # Build clinically accurate observation statement
+        if performed:
+            # List what was done
+            if "Examination" in performed and len(performed) == 1:
+                observation_parts.append("Clinical examination performed")
+            elif "Examination" in performed:
+                other_performed = [inv for inv in performed if inv != "Examination"]
+                observation_parts.append(f"Clinical examination and {', '.join(other_performed).lower()} performed")
+            else:
+                observation_parts.append(f"Investigations performed: {', '.join(performed)}")
         
+        # Only mention negated investigations if explicitly stated (not just absent)
+        if negated:
+            negated_phrasing = []
+            for inv in negated:
+                if inv == "X-ray":
+                    negated_phrasing.append("No X-rays obtained")
+                elif inv == "MRI":
+                    negated_phrasing.append("No MRI obtained")
+                elif inv == "CT Scan":
+                    negated_phrasing.append("No CT scan obtained")
+                else:
+                    negated_phrasing.append(f"No {inv.lower()} obtained")
+            observation_parts.extend(negated_phrasing)
+        
+        # Mention considered investigations if present
+        if considered:
+            observation_parts.append(f"{', '.join(considered)} may be considered if symptoms worsen")
+
+        if observation_parts:
+            objective["Observations"] = ". ".join(observation_parts) + "."
+        else:
+            objective["Observations"] = "No additional observations documented."
+
         return objective
     
     def extract_assessment(self, entities: Dict, transcript: str) -> Dict:
@@ -176,67 +217,21 @@ class SOAPNoteGenerator:
         
         return assessment
     
-    def extract_plan(self, entities: Dict, transcript: str) -> Dict:
-        """
-        Extract Plan section (treatment plan and follow-up)
-        
-        Args:
-            entities: Extracted medical entities
-            transcript: Full conversation transcript
-            
-        Returns:
-            Dictionary with plan information
-        """
+    def extract_plan(self, entities: Dict) -> Dict:
+        """Build Plan section from structured entities only."""
         plan = {
             "Treatment": "",
             "Follow_Up": ""
         }
-        
-        # Extract treatment plan
+
         treatments = entities.get('Treatment', [])
-        treatment_plan = []
-        
-        # Check if ongoing treatment is mentioned
-        if 'physiotherapy' in str(treatments).lower():
-            treatment_plan.append("Continue physiotherapy as needed")
-        
-        if 'painkiller' in str(treatments).lower() or 'analgesic' in str(treatments).lower():
-            treatment_plan.append("use analgesics for pain relief")
-        
-        # Look for recommendations in transcript
-        if 'continue' in transcript.lower():
-            continue_match = re.search(r'continue\s+([^.]+)', transcript.lower())
-            if continue_match:
-                recommendation = continue_match.group(1).strip()
-                if recommendation not in str(treatment_plan):
-                    treatment_plan.append(recommendation)
-        
-        if treatment_plan:
-            plan["Treatment"] = ", ".join(treatment_plan).capitalize() + "."
+        if treatments:
+            plan["Treatment"] = ", ".join(treatments) + "."
         else:
-            plan["Treatment"] = "Conservative management with pain medication as needed."
-        
-        # Extract follow-up instructions
-        follow_up = []
-        
-        if 'follow-up' in transcript.lower() or 'come back' in transcript.lower():
-            follow_up_match = re.search(
-                r'(?:follow-up|come back)[^.]*(?:if|when)[^.]+',
-                transcript.lower()
-            )
-            if follow_up_match:
-                follow_up.append(follow_up_match.group(0).capitalize())
-        
-        # Check for timeframe mentions
-        prognosis = entities.get('Prognosis', '')
-        if 'six months' in prognosis.lower():
-            follow_up.append("Patient to return if pain worsens or persists beyond six months")
-        
-        if follow_up:
-            plan["Follow_Up"] = ". ".join(follow_up) + "."
-        else:
-            plan["Follow_Up"] = "Patient instructed to return if symptoms worsen or new symptoms develop."
-        
+            plan["Treatment"] = "Conservative management with analgesics as needed."
+
+        plan["Follow_Up"] = "Return for review if symptoms worsen or fail to improve within six weeks."
+
         return plan
     
     def generate_soap_note(self, transcript: str, entities: Dict) -> Dict:
@@ -252,9 +247,9 @@ class SOAPNoteGenerator:
         """
         soap_note = {
             "Subjective": self.extract_subjective(transcript, entities),
-            "Objective": self.extract_objective(transcript),
+            "Objective": self.extract_objective(transcript, entities),
             "Assessment": self.extract_assessment(entities, transcript),
-            "Plan": self.extract_plan(entities, transcript)
+            "Plan": self.extract_plan(entities)
         }
         
         return soap_note

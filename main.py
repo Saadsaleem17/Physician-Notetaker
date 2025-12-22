@@ -63,25 +63,16 @@ class MedicalTranscriptionPipeline:
         
         # 1. Named Entity Recognition
         if verbose:
-            mode = "Hybrid NER" if self.use_hybrid_ner else "Rule-based NER"
-            print(f"[Step 1] Extracting Medical Entities ({mode})...")
+            print(f"[Step 1] Extracting Medical Entities...")
         
         # Extract entities using configured mode
         entities = self.ner.extract_medical_entities(transcript)
         results['entities'] = entities
         
-        # Optional: Show NER comparison
+        # Optional: Show NER comparison (for internal analysis only)
         if show_ner_comparison and self.ner.transformer_ner:
-            if verbose:
-                print("\n   [NER Comparison]:")
             comparison = self.ner.extract_symptoms_hybrid(transcript)
             results['ner_comparison'] = comparison
-            if verbose:
-                print(f"      Rule-based: {len(comparison['rule_based'])} symptoms")
-                print(f"      Transformer: {len(comparison['transformer_based'])} symptoms")
-                print(f"      Combined: {len(comparison['combined'])} symptoms")
-                if comparison['transformer_only']:
-                    print(f"      [!] Transformer caught: {', '.join(comparison['transformer_only'][:3])}")
         
         if verbose:
             print(f"   >> Extracted: {len(entities.get('Symptoms', []))} symptoms, "
@@ -93,7 +84,7 @@ class MedicalTranscriptionPipeline:
         keywords = self.keyword_extractor.extract_keywords(transcript)
         results['keywords'] = keywords
         if verbose:
-            print(f"   Found {len(keywords)} key medical phrases")
+            print(f"   >> Found {len(keywords)} key medical phrases")
         
         # 3. Medical Summarization
         if verbose:
@@ -111,7 +102,7 @@ class MedicalTranscriptionPipeline:
         conversation_analysis = self.sentiment_analyzer.analyze_conversation(transcript)
         results['sentiment_intent'] = conversation_analysis
         if verbose:
-            print(f"   Analyzed {len(conversation_analysis)} patient utterances")
+            print(f"   >> Analyzed {len(conversation_analysis)} patient utterances")
         
         # 5. SOAP Note Generation
         if verbose:
@@ -197,39 +188,29 @@ def main():
     # Initialize pipeline with hybrid NER (default)
     pipeline = MedicalTranscriptionPipeline(use_hybrid_ner=True)
     
-    # Process transcript with NER comparison
-    results = pipeline.process_transcript(transcript, verbose=True, show_ner_comparison=True)
+    # Process transcript WITHOUT NER comparison (not part of assignment)
+    results = pipeline.process_transcript(transcript, verbose=True, show_ner_comparison=False)
     
     # Display results
     print("\n" + "=" * 70)
-    print("RESULTS")
+    print("MEDICAL NLP ANALYSIS RESULTS")
     print("=" * 70)
     
-    print("\n1. EXTRACTED ENTITIES:")
+    print("\n[STRUCTURED SUMMARY (JSON)]:")
     print(json.dumps(results['json_summary'], indent=2))
     
-    # Show NER comparison if available
-    if 'ner_comparison' in results:
-        print("\n1b. NER EXTRACTION COMPARISON:")
-        comparison = results['ner_comparison']
-        print(f"   Rule-based found: {comparison['rule_based']}")
-        print(f"   Transformer found: {comparison['transformer_based']}")
-        print(f"   Combined result: {comparison['combined']}")
-        if comparison['transformer_only']:
-            print(f"   [!] Transformer uniquely caught: {comparison['transformer_only']}")
-    
-    print("\n2. KEY MEDICAL PHRASES:")
+    print("\n[KEY MEDICAL PHRASES]:")
     for i, keyword in enumerate(results['keywords'], 1):
         print(f"   {i}. {keyword}")
     
-    print("\n3. SENTIMENT & INTENT ANALYSIS:")
+    print("\n[SENTIMENT & INTENT ANALYSIS]:")
     for i, analysis in enumerate(results['sentiment_intent'], 1):
-        print(f"\n   Utterance {i}:")
-        print(f"   Text: {analysis['Text']}")
+        print(f"\n   Patient Utterance {i}:")
+        print(f"   Text: {analysis['Text'][:80]}..." if len(analysis['Text']) > 80 else f"   Text: {analysis['Text']}")
         print(f"   Sentiment: {analysis['Sentiment']}")
         print(f"   Intent: {analysis['Intent']}")
     
-    print("\n4. SOAP NOTE:")
+    print("\n[SOAP NOTE]:")
     print(results['soap_note_text'])
     
     # Save results
@@ -237,26 +218,8 @@ def main():
     output_path.parent.mkdir(exist_ok=True)
     pipeline.save_results(results, str(output_path))
     
-    # Example: Analyze single utterance
     print("\n" + "=" * 70)
-    print("SINGLE UTTERANCE ANALYSIS EXAMPLE (with Hybrid NER)")
-    print("=" * 70)
-    
-    sample_utterance = "I have severe cough, fever, and my lungs feel heavy."
-    print(f"\nText: \"{sample_utterance}\"")
-    
-    # Extract symptoms using hybrid approach
-    utterance_entities = pipeline.ner.extract_medical_entities(sample_utterance, mode='utterance')
-    print(f"\nSymptoms Detected: {utterance_entities['Symptoms']}")
-    
-    # Sentiment analysis
-    analysis = pipeline.analyze_single_utterance(sample_utterance)
-    print(f"Sentiment: {analysis['Sentiment']}")
-    print(f"Intent: {analysis['Intent']}")
-    
-    print("\n" + "=" * 70)
-    print("Pipeline execution completed successfully!")
-    print("[!] Tip: Run 'python compare_ner.py' to see detailed NER comparison")
+    print(">> Pipeline execution completed successfully!")
     print("=" * 70)
 
 

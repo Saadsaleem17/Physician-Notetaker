@@ -654,33 +654,83 @@ class MedicalNER:
             
         return sorted(list(normalized_treatments))
     
-    def extract_investigations(self, text: str) -> List[str]:
+    def extract_investigations(self, text: str) -> Dict[str, List[str]]:
         """
-        Extract diagnostic investigations/tests from text
+        Extract diagnostic investigations/tests from text with explicit status.
+
+        Status buckets:
+        - performed: actually done in this encounter
+        - considered: discussed as a possibility/conditional
+        - negated: explicitly stated not done/needed
         
-        Investigations = diagnostic procedures (X-rays, MRI, blood tests, etc.)
+        Special rule: Examination is assumed performed unless explicitly negated.
         """
-        investigations = set()
         text_lower = text.lower()
-        
-        # Investigation patterns
-        investigation_patterns = [
-            r'(x-rays?)',
-            r'(mri)',
-            r'(ct\s+scan)',
-            r'(blood\s+tests?)',
-            r'(ultrasound)',
-            r'(examination)',
+
+        # Canonical investigation patterns
+        investigations = {
+            "MRI": r"mri",
+            "X-ray": r"x[-\s]?rays?",
+            "CT Scan": r"ct\s+scan",
+            "Blood Test": r"blood\s+tests?",
+            "Ultrasound": r"ultrasound",
+            "Examination": r"(?:physical\s+)?examinations?|exam\b",
+        }
+
+        negated_patterns = [
+            r"(?:no|without)\s+(?:any\s+)?(?:{k})",
+            r"(?:didn't|did\s+not)\s+do\s+(?:any\s+)?(?:{k})",
+            r"(?:{k})\s+(?:wasn't|was\s+not)\s+done",
+            r"no\s+need\s+for\s+(?:{k})",
+            r"(?:{k})\s+(?:is|was)\s+not\s+(?:necessary|required|indicated)",
         ]
-        
-        for pattern in investigation_patterns:
-            if re.search(pattern, text_lower):
-                match = re.search(pattern, text_lower)
-                investigation = match.group(1)
-                investigation = ' '.join(word.capitalize() for word in investigation.split())
-                investigations.add(investigation)
-        
-        return sorted(list(investigations))
+
+        considered_patterns = [
+            r"would\s+(?:only\s+)?consider[^.]*?(?:{k})",
+            r"could\s+do[^.]*?(?:{k})\s+if\s+needed",
+            r"might\s+need[^.]*?(?:{k})",
+            r"(?:{k})[^.]*?if\s+symptoms\s+worsen",
+            r"if\s+symptoms\s+worsen[^.]*?(?:{k})",
+        ]
+
+        performed_patterns = [
+            r"(?:did|performed|ordered|arranged)\s+(?:a\s+)?(?:{k})",
+            r"(?:{k})\s+(?:was|were)\s+(?:done|performed|completed)",
+            r"\b(?:{k})\b",
+        ]
+
+        status_buckets = {"performed": set(), "considered": set(), "negated": set()}
+
+        for name, pattern in investigations.items():
+            keyword_regex = pattern
+
+            def matches(patterns: List[str]) -> bool:
+                return any(re.search(p.format(k=keyword_regex), text_lower) for p in patterns)
+
+            # Special handling for Examination: assumed performed unless explicitly negated
+            if name == "Examination":
+                # Only negate if explicitly stated "no examination" or "examination was not done"
+                explicit_exam_negation = [
+                    r"no\s+(?:physical\s+)?examinations?",
+                    r"examinations?\s+(?:was|were)\s+not\s+done",
+                    r"(?:didn't|did\s+not)\s+do\s+(?:an?\s+)?examinations?",
+                ]
+                if any(re.search(p, text_lower) for p in explicit_exam_negation):
+                    status_buckets["negated"].add(name)
+                elif re.search(keyword_regex, text_lower) or any(kw in text_lower for kw in ['accident', 'emergency', 'hospital', 'checked', 'examined']):
+                    # Examination is performed if mentioned OR if clinical context present
+                    status_buckets["performed"].add(name)
+                continue
+
+            # Standard processing for other investigations
+            if matches(negated_patterns):
+                status_buckets["negated"].add(name)
+            elif matches(considered_patterns):
+                status_buckets["considered"].add(name)
+            elif re.search(keyword_regex, text_lower):
+                status_buckets["performed"].add(name)
+
+        return {state: sorted(list(values)) for state, values in status_buckets.items()}
     
     def has_diagnostic_context(self, text: str) -> bool:
         """
@@ -873,6 +923,17 @@ class MedicalNER:
     def extract_current_status(self, text: str) -> str:
         """Extract current patient status with temporal context"""
         text_lower = text.lower()
+
+        # Helper flags for resolution threshold
+        pain_score_present = bool(re.search(r'\b([1-9])\s*/\s*10\b', text_lower) or re.search(r'\baround\s+([1-9])\b.*most\s+days', text_lower))
+        functional_limitation = any(kw in text_lower for kw in [
+            'avoid heavy lifting', 'reduce my workload', 'reduced my workload',
+            'pain on overhead movement', 'overhead movement', 'overhead activity',
+            'end-range pain', 'limits my', 'still hurts when', 'lifting above my head'
+        ])
+        active_treatment = any(kw in text_lower for kw in [
+            'physiotherapy', 'therapy', 'exercises', 'painkillers', 'analgesics'
+        ])
         
         # Check for chronic/ongoing pain patterns (months, weeks of duration)
         # Handles both numeric (3 months) and written (three months) formats
@@ -911,8 +972,12 @@ class MedicalNER:
             return "Occasional backache"
         elif 'doing better' in text_lower:
             return "Improving, occasional discomfort"
-            
-        return "Recovering well"
+        
+        # Resolution threshold: only "recovering well" if no pain score, no limitation, no active treatment
+        if not (pain_score_present or functional_limitation or active_treatment):
+            return "Recovering well"
+        
+        return "Improving but not resolved"
 
     def extract_onset(self, text: str) -> str:
         """Extract onset type (gradual vs sudden)"""

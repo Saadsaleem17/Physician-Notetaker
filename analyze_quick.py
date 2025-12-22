@@ -32,23 +32,23 @@ try:
     entities = ner.extract_medical_entities(patient_text, mode="utterance")
     
     # Display results (NLP-generated, not hardcoded)
-    print(f"\n📝 INPUT: \"{patient_text}\"")
+    print(f"\n[INPUT]: \"{patient_text}\"")
     print("\n" + "="*70)
     print("NLP ANALYSIS RESULTS")
     print("="*70)
     
-    print(f"\n💭 SENTIMENT: {sentiment_result['Sentiment']}")
-    print(f"🎯 INTENT: {sentiment_result['Intent']}")
+    print(f"\n[SENTIMENT]: {sentiment_result['Sentiment']}")
+    print(f"[INTENT]: {sentiment_result['Intent']}")
     
     if entities['Symptoms']:
-        print(f"\n🩺 EXTRACTED SYMPTOMS: {', '.join(entities['Symptoms'])}")
+        print(f"\n[EXTRACTED SYMPTOMS]: {', '.join(entities['Symptoms'])}")
     else:
-        print(f"\n🩺 EXTRACTED SYMPTOMS: None detected")
+        print(f"\n[EXTRACTED SYMPTOMS]: None detected")
     
     if entities['Diagnosis']:
-        print(f"📋 DIAGNOSIS: {entities['Diagnosis']}")
+        print(f"[DIAGNOSIS]: {entities['Diagnosis']}")
     else:
-        print(f"📋 DIAGNOSIS: None (insufficient clinical context)")
+        print(f"[DIAGNOSIS]: None (insufficient clinical context)")
     
     # NLP-based clinical assessment
     print("\n" + "="*70)
@@ -56,22 +56,22 @@ try:
     print("="*70)
     
     if sentiment_result['Sentiment'] == 'Anxious':
-        print("⚠️  Patient shows signs of anxiety/distress")
+        print(">>  Patient shows signs of anxiety/distress")
     elif sentiment_result['Sentiment'] == 'Reassured':
-        print("✓ Patient appears reassured/positive")
+        print(">> Patient appears reassured/positive")
     else:
-        print("ℹ️  Patient sentiment is neutral")
+        print(">>  Patient sentiment is neutral")
     
     if 'pain' in patient_text.lower():
-        print("⚠️  Pain symptoms detected - requires attention")
+        print(">>  Pain symptoms detected - requires attention")
     
     if any(word in patient_text.lower() for word in ['survive', 'die', 'death', 'fatal']):
-        print("🚨 URGENT: Life-threatening concerns expressed")
+        print(">> URGENT: Life-threatening concerns expressed")
     
     print("="*70)
     
 except ImportError:
-    print("\n❌ ERROR: Required packages not installed yet.")
+    print("\n[ERROR]: Required packages not installed yet.")
     print("\nPlease run setup first:")
     print("  .\\setup.ps1")
     print("\nOr install manually:")

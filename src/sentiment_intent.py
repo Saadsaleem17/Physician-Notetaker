@@ -146,7 +146,14 @@ class IntentDetector:
     
     def __init__(self):
         """Initialize intent detection"""
+        # Pattern priority matters: earlier categories are checked first
         self.intent_patterns = {
+            "Answering questions": [
+                r'^(?:yes|no)(?:\s|,|\.)',
+                r'^(?:yeah|yep|nope|nah)(?:\s|,|\.)',
+                r'^(?:i\s+(?:do|did|was|am|have|had|went|always|never))\b',
+                r'^(?:nothing|not\s+really|not\s+at\s+all)(?:\s+like\s+that)?\.?$',
+            ],
             "Seeking reassurance": [
                 r'(?:will|can)\s+(?:i|this)\s+(?:get\s+)?better',
                 r'(?:should|do)\s+i\s+(?:be\s+)?worr(?:y|ied)',
@@ -159,6 +166,9 @@ class IntentDetector:
                 r'my\s+\w+\s+(?:hurts?|aches?|pains?)',
                 r'(?:it|pain|discomfort)\s+(?:was|is)\s+(?:really\s+)?(?:bad|severe|intense)',
                 r'i\s+(?:can|could)\s+feel\s+(?:pain|discomfort)',
+                r'(?:it\'?s\s+)?not\s+constant.*(?:get|have)\s+(?:occasional|some)',
+                r'^(?:at\s+first|initially|in\s+the\s+beginning)',
+                r'(?:weeks?|months?)\s+(?:were|was)\s+(?:rough|bad|difficult|painful)',
             ],
             "Describing treatment history": [
                 r'i\s+(?:had|went\s+to|received|took)\s+(?:\w+\s+)?(?:sessions?|therapy|treatment|medication)',
@@ -197,6 +207,7 @@ class IntentDetector:
             Intent label
         """
         text_lower = text.lower().strip()
+        word_count = len(text.split())
         
         # Score each intent
         intent_scores = {}
@@ -208,6 +219,14 @@ class IntentDetector:
                     score += 1
             if score > 0:
                 intent_scores[intent] = score
+        
+        # Special validation: "Answering questions" only for short utterances (≤ 8 words)
+        # This prevents long symptom descriptions from being misclassified
+        if "Answering questions" in intent_scores and word_count > 8:
+            # Check if it's a symptom report
+            symptom_keywords = ['pain', 'hurt', 'ache', 'cough', 'fever', 'feel', 'discomfort', 'nausea', 'dizzy']
+            if any(kw in text_lower for kw in symptom_keywords):
+                del intent_scores["Answering questions"]
         
         # Return highest scoring intent
         if intent_scores:
