@@ -11,8 +11,7 @@ from typing import Dict
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from src.medical_ner import MedicalNER, KeywordExtractor
-from src.medical_summarizer import MedicalSummarizer
+from src.medical_ner import MedicalNER, KeywordExtractor, MedicalSummarizer
 from src.sentiment_intent import SentimentIntentAnalyzer
 from src.soap_generator import SOAPNoteGenerator
 
